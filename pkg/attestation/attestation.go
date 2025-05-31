@@ -68,7 +68,15 @@ func DefaultAttestOptions() AttestOptions {
 }
 
 // Attest creates a remote attestation report based on the provided options
-func Attest(rwc io.ReadWriter, opts AttestOptions) ([]byte, error) {
+func Attest(opts AttestOptions) ([]byte, error) {
+
+	// Open the TPM device
+	rwc, err := tpm2.OpenTPM()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open TPM: %v", err)
+	}
+	defer rwc.Close()
+
 	if !(opts.Format == "binarypb" || opts.Format == "textproto") {
 		return nil, fmt.Errorf("format should be either binarypb or textproto")
 	}
@@ -79,8 +87,8 @@ func Attest(rwc io.ReadWriter, opts AttestOptions) ([]byte, error) {
 		return nil, fmt.Errorf("key should be either AK or gceAK")
 	}
 	createFunc := algoToCreateAK[opts.KeyAlgo]
-	attestationKey, err := createFunc(rwc)
-	if err != nil {
+	attestationKey, attKeyErr := createFunc(rwc)
+	if attKeyErr != nil {
 		return nil, fmt.Errorf("failed to create attestation key: %v", err)
 	}
 	defer attestationKey.Close()
@@ -142,8 +150,8 @@ func Attest(rwc io.ReadWriter, opts AttestOptions) ([]byte, error) {
 }
 
 // GetAttestation creates an attestation report and returns the unmarshaled proto
-func GetAttestation(rwc io.ReadWriter, opts AttestOptions) (*attest.Attestation, error) {
-	attestBytes, err := Attest(rwc, opts)
+func GetAttestation(opts AttestOptions) (*attest.Attestation, error) {
+	attestBytes, err := Attest(opts)
 	if err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,8 @@ import (
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+
+	"lunal-tee-attestation/pkg/attestation" // Update this with your actual module path
 )
 
 const (
@@ -19,9 +22,22 @@ const (
 	ProxyPort = ":9080"
 	// Target server URL (local server on same machine)
 	TargetServer = "http://127.0.0.1:8082"
+	// TPM device path
+	TPMDevicePath = "/dev/tpm0" // Adjust if your TPM device path is different
+)
+
+var (
+	// Store the attestation data to avoid regenerating it for every request
+	cachedAttestation     []byte
+	cachedAttestationB64  string
+	lastAttestationTime   time.Time
+	attestationTTLMinutes = 60 // Refresh attestation every 5 minutes
 )
 
 func main() {
+	// Generate initial attestation on startup
+	generateAttestation()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", proxyHandler)
 
@@ -39,9 +55,46 @@ func main() {
 	log.Fatal(server.ListenAndServe())
 }
 
+func generateAttestation() {
+
+	// Create attestation with default options
+	opts := attestation.DefaultAttestOptions()
+
+	// You can customize the options if needed
+	// opts.Key = "AK"
+	// opts.KeyAlgo = tpm2.AlgRSA
+	// opts.Format = "binarypb"
+
+	attestBytes, err := attestation.Attest(opts)
+	if err != nil {
+		log.Printf("WARNING: Failed to generate attestation: %v", err)
+		cachedAttestationB64 = base64.StdEncoding.EncodeToString([]byte("attestation-generation-failed"))
+		return
+	}
+
+	// Cache the attestation and its base64 representation
+	cachedAttestation = attestBytes
+	cachedAttestationB64 = base64.StdEncoding.EncodeToString(attestBytes)
+	lastAttestationTime = time.Now()
+
+	log.Printf("Successfully generated attestation (%d bytes)", len(attestBytes))
+}
+
+func refreshAttestationIfNeeded(r *http.Request) {
+	// Check if attestation is stale
+	// if time.Since(lastAttestationTime).Minutes() > float64(attestationTTLMinutes) {
+	log.Println("Refreshing attestation...")
+	fmt.Printf("[TASK] Processing request: %s %s\n", r.Method, r.URL.Path)
+	fmt.Printf("[TASK] User-Agent: %s\n", r.Header.Get("User-Agent"))
+	fmt.Printf("[TASK] Remote Address: %s\n", r.RemoteAddr)
+	fmt.Println("[TASK] Attestation is included in response header")
+	generateAttestation()
+	// }
+}
+
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
-	// Perform your custom task here
-	performCustomTask(r)
+	// Refresh attestation if needed
+	refreshAttestationIfNeeded(r)
 
 	// Create the target URL (keep the same path)
 	targetURL, err := url.Parse(TargetServer)
@@ -111,22 +164,10 @@ func modifyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 		}
 	}
 
-	// Add custom attestation header
-	w.Header().Set("Attestation-Report", "verified-proxy-attestation-12345")
+	w.Header().Set("Attestation-Report", cachedAttestationB64)
 }
 
-func performCustomTask(r *http.Request) {
-	// Placeholder for your custom task
-	fmt.Printf("[TASK] Processing request: %s %s\n", r.Method, r.URL.Path)
-	fmt.Printf("[TASK] User-Agent: %s\n", r.Header.Get("User-Agent"))
-	fmt.Printf("[TASK] Remote Address: %s\n", r.RemoteAddr)
-	fmt.Println("[TASK] Custom task completed!")
+// func performCustomTask(r *http.Request) {
+// 	// Placeholder for your custom task
 
-	// Add your actual task logic here:
-	// - Database operations
-	// - Logging
-	// - Authentication
-	// - Rate limiting
-	// - Analytics
-	// - etc.
-}
+// }
