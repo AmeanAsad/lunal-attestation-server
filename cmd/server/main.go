@@ -59,6 +59,7 @@ func generateAttestation() {
 
 	// Create attestation with default options
 	opts := attestation.DefaultAttestOptions()
+	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
 
 	// You can customize the options if needed
 	// opts.Key = "AK"
