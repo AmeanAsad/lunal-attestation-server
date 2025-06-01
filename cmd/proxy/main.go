@@ -44,7 +44,6 @@ func main() {
 	fmt.Printf("Proxy server starting on port %s with HTTP/2 support\n", ProxyPort)
 	fmt.Printf("Forwarding all requests to %s\n", TargetServer)
 
-	// Create HTTP/2 server that works without TLS (h2c - HTTP/2 cleartext)
 	h2s := &http2.Server{}
 
 	server := &http.Server{
@@ -60,11 +59,6 @@ func generateAttestation() {
 	// Create attestation with default options
 	opts := attestation.DefaultAttestOptions()
 	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
-
-	// You can customize the options if needed
-	// opts.Key = "AK"
-	// opts.KeyAlgo = tpm2.AlgRSA
-	// opts.Format = "binarypb"
 
 	attestBytes, err := attestation.Attest(opts)
 	if err != nil {
@@ -132,7 +126,6 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http2.Transport{
-			// Allow HTTP/2 without TLS
 			AllowHTTP: true,
 			// Dial function for HTTP/2 over TCP
 			DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
@@ -167,8 +160,3 @@ func modifyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 
 	w.Header().Set("Attestation-Report", cachedAttestationB64)
 }
-
-// func performCustomTask(r *http.Request) {
-// 	// Placeholder for your custom task
-
-// }
