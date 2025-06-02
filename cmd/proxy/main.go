@@ -36,7 +36,7 @@ var (
 
 func main() {
 	// Generate initial attestation on startup
-	// generateAttestation()
+	generateAttestation()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", proxyHandler)
@@ -138,8 +138,6 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 			DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
 				return net.Dial(network, addr)
 			},
-			// Increase header list size for client as well
-			MaxHeaderListSize: 100 * 1024, // 100KB
 		},
 	}
 
@@ -158,32 +156,14 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("✅ Got response after %v: status %d", elapsed, resp.StatusCode)
 
-	// Read the original response body
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("❌ Error reading response body: %v", err)
-		http.Error(w, "Error reading response", http.StatusBadGateway)
-		return
-	}
-
 	// Modify response headers before sending back
 	modifyResponseHeaders(w, resp)
 
-	// Write response with attestation appended
+	// Copy the response body
 	w.WriteHeader(resp.StatusCode)
-
-	// Write original response
-	_, err = w.Write(respBody)
+	_, err = io.Copy(w, resp.Body)
 	if err != nil {
-		log.Printf("❌ Error writing response body: %v", err)
-		return
-	}
-
-	// Append attestation as a trailer or separate section
-	attestationSuffix := fmt.Sprintf("\n--ATTESTATION-BOUNDARY--\n%s\n", cachedAttestationB64)
-	_, err = w.Write([]byte(attestationSuffix))
-	if err != nil {
-		log.Printf("❌ Error writing attestation: %v", err)
+		log.Printf("❌ Error copying response body: %v", err)
 	}
 
 	totalElapsed := time.Since(start)
@@ -198,7 +178,5 @@ func modifyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 		}
 	}
 
-	// Set the full attestation report (now that we increased header limits)
-	w.Header().Set("Attestation-Report", cachedAttestationB64)
-	// log.Printf("📋 Set attestation header (%d characters)", len(cachedAttestationB64))
+	w.Header().Set("Attestation-Report", cachedAttestationB64[:1000])
 }
