@@ -88,12 +88,16 @@ func refreshAttestationIfNeeded(r *http.Request) {
 }
 
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	log.Printf("🚀 [%s] Request started: %s %s from %s", start.Format("15:04:05.000"), r.Method, r.URL.Path, r.RemoteAddr)
+
 	// Refresh attestation if needed
 	// refreshAttestationIfNeeded(r)
 
 	// Create the target URL (keep the same path)
 	targetURL, err := url.Parse(TargetServer)
 	if err != nil {
+		log.Printf("❌ Invalid target server: %v", err)
 		http.Error(w, "Invalid target server", http.StatusInternalServerError)
 		return
 	}
@@ -101,9 +105,12 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	targetURL.Path = r.URL.Path
 	targetURL.RawQuery = r.URL.RawQuery
 
+	log.Printf("🎯 Forwarding to: %s", targetURL.String())
+
 	// Create a new request to forward to the target server
 	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body)
 	if err != nil {
+		log.Printf("❌ Error creating proxy request: %v", err)
 		http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
 		return
 	}
@@ -122,9 +129,9 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		proxyReq.Header.Set("X-Real-IP", r.RemoteAddr)
 	}
 
-	// Create HTTP client with HTTP/2 support
+	// Create HTTP client with HTTP/2 support and increased timeout
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 300 * time.Second, // Increased from 30s to 5 minutes
 		Transport: &http2.Transport{
 			AllowHTTP: true,
 			// Dial function for HTTP/2 over TCP
@@ -134,20 +141,33 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	log.Printf("⏳ Sending request to target server...")
+
 	// Send the request to target server
 	resp, err := client.Do(proxyReq)
+	elapsed := time.Since(start)
+
 	if err != nil {
+		log.Printf("❌ Request failed after %v: %v", elapsed, err)
 		http.Error(w, "Error forwarding request", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
+
+	log.Printf("✅ Got response after %v: status %d", elapsed, resp.StatusCode)
 
 	// Modify response headers before sending back
 	modifyResponseHeaders(w, resp)
 
 	// Copy the response body
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	_, err = io.Copy(w, resp.Body)
+	if err != nil {
+		log.Printf("❌ Error copying response body: %v", err)
+	}
+
+	totalElapsed := time.Since(start)
+	log.Printf("🏁 [%s] Request completed in %v", time.Now().Format("15:04:05.000"), totalElapsed)
 }
 
 func modifyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
