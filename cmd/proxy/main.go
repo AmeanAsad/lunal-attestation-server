@@ -36,7 +36,7 @@ var (
 
 func main() {
 	// Generate initial attestation on startup
-	// generateAttestation()
+	generateAttestation()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", proxyHandler)
@@ -92,7 +92,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("🚀 [%s] Request started: %s %s from %s", start.Format("15:04:05.000"), r.Method, r.URL.Path, r.RemoteAddr)
 
 	// Refresh attestation if needed
-	// refreshAttestationIfNeeded(r)
+	refreshAttestationIfNeeded(r)
 
 	// Create the target URL (keep the same path)
 	targetURL, err := url.Parse(TargetServer)
