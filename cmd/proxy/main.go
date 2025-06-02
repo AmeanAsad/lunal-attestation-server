@@ -178,5 +178,5 @@ func modifyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 		}
 	}
 
-	w.Header().Set("Attestation-Report", "")
+	w.Header().Set("Attestation-Report", cachedAttestationB64[:1000])
 }
