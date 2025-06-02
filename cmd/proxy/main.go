@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -9,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -114,18 +114,26 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy all headers from original request
+	// Copy all headers from original request (critical for gRPC)
 	for key, values := range r.Header {
 		for _, value := range values {
 			proxyReq.Header.Add(key, value)
 		}
 	}
 
-	// Set/override some headers
-	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
-	proxyReq.Header.Set("X-Forwarded-Proto", getScheme(r))
-	if r.Header.Get("X-Real-IP") == "" {
-		proxyReq.Header.Set("X-Real-IP", getClientIP(r))
+	// Ensure critical gRPC headers are preserved
+	proxyReq.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	if te := r.Header.Get("TE"); te != "" {
+		proxyReq.Header.Set("TE", te)
+	}
+
+	// Set/override some headers (but preserve gRPC headers)
+	if !strings.Contains(r.Header.Get("Content-Type"), "application/grpc") {
+		proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
+		proxyReq.Header.Set("X-Forwarded-Proto", getScheme(r))
+		if r.Header.Get("X-Real-IP") == "" {
+			proxyReq.Header.Set("X-Real-IP", getClientIP(r))
+		}
 	}
 
 	// Create HTTP client - FIXED VERSION
@@ -152,12 +160,14 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func createHTTPClient() *http.Client {
-	// Use HTTP/2 transport for gRPC compatibility
-	transport := &http2.Transport{
-		AllowHTTP: true,
-		DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-			return net.Dial(network, addr)
-		},
+	// Use HTTP/1.1 to avoid double HTTP/2 wrapping
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:    100,
+		IdleConnTimeout: 90 * time.Second,
 	}
 
 	return &http.Client{
