@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -8,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -21,7 +21,7 @@ const (
 	// Port for the proxy server
 	ProxyPort = ":9080"
 	// Target server URL (local server on same machine)
-	TargetServer = "http://127.0.0.1:8082" // Fixed: using your Miden proxy port
+	TargetServer = "http://127.0.0.1:8082"
 	// TPM device path
 	TPMDevicePath = "/dev/tpm0" // Adjust if your TPM device path is different
 )
@@ -31,12 +31,12 @@ var (
 	cachedAttestation     []byte
 	cachedAttestationB64  string
 	lastAttestationTime   time.Time
-	attestationTTLMinutes = 60 // Refresh attestation every 60 minutes
+	attestationTTLMinutes = 60 // Refresh attestation every 5 minutes
 )
 
 func main() {
 	// Generate initial attestation on startup
-	generateAttestation()
+	// generateAttestation()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", proxyHandler)
@@ -44,24 +44,18 @@ func main() {
 	fmt.Printf("Proxy server starting on port %s with HTTP/2 support\n", ProxyPort)
 	fmt.Printf("Forwarding all requests to %s\n", TargetServer)
 
-	h2s := &http2.Server{
-		MaxConcurrentStreams: 100,
-		MaxReadFrameSize:     1048576,           // 1MB
-		IdleTimeout:          300 * time.Second, // Match client timeout
-	}
+	h2s := &http2.Server{}
 
 	server := &http.Server{
-		Addr:         ProxyPort,
-		Handler:      h2c.NewHandler(mux, h2s),
-		ReadTimeout:  300 * time.Second, // Match proving timeout
-		WriteTimeout: 300 * time.Second,
-		IdleTimeout:  300 * time.Second,
+		Addr:    ProxyPort,
+		Handler: h2c.NewHandler(mux, h2s),
 	}
 
 	log.Fatal(server.ListenAndServe())
 }
 
 func generateAttestation() {
+
 	// Create attestation with default options
 	opts := attestation.DefaultAttestOptions()
 	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
@@ -82,7 +76,7 @@ func generateAttestation() {
 }
 
 func refreshAttestationIfNeeded(r *http.Request) {
-	// Check if attestation is stale (currently commented out the time check)
+	// Check if attestation is stale
 	// if time.Since(lastAttestationTime).Minutes() > float64(attestationTTLMinutes) {
 	log.Println("Refreshing attestation...")
 	fmt.Printf("[TASK] Processing request: %s %s\n", r.Method, r.URL.Path)
@@ -95,7 +89,7 @@ func refreshAttestationIfNeeded(r *http.Request) {
 
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Refresh attestation if needed
-	refreshAttestationIfNeeded(r)
+	// refreshAttestationIfNeeded(r)
 
 	// Create the target URL (keep the same path)
 	targetURL, err := url.Parse(TargetServer)
@@ -114,35 +108,35 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy all headers from original request (critical for gRPC)
+	// Copy all headers from original request
 	for key, values := range r.Header {
 		for _, value := range values {
 			proxyReq.Header.Add(key, value)
 		}
 	}
 
-	// Ensure critical gRPC headers are preserved
-	proxyReq.Header.Set("Content-Type", r.Header.Get("Content-Type"))
-	if te := r.Header.Get("TE"); te != "" {
-		proxyReq.Header.Set("TE", te)
+	// Set/override some headers
+	proxyReq.Header.Set("X-Forwarded-For", r.RemoteAddr)
+	proxyReq.Header.Set("X-Forwarded-Proto", "http")
+	if r.Header.Get("X-Real-IP") == "" {
+		proxyReq.Header.Set("X-Real-IP", r.RemoteAddr)
 	}
 
-	// Set/override some headers (but preserve gRPC headers)
-	if !strings.Contains(r.Header.Get("Content-Type"), "application/grpc") {
-		proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
-		proxyReq.Header.Set("X-Forwarded-Proto", getScheme(r))
-		if r.Header.Get("X-Real-IP") == "" {
-			proxyReq.Header.Set("X-Real-IP", getClientIP(r))
-		}
+	// Create HTTP client with HTTP/2 support
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http2.Transport{
+			AllowHTTP: true,
+			// Dial function for HTTP/2 over TCP
+			DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+				return net.Dial(network, addr)
+			},
+		},
 	}
-
-	// Create HTTP client - FIXED VERSION
-	client := createHTTPClient()
 
 	// Send the request to target server
 	resp, err := client.Do(proxyReq)
 	if err != nil {
-		log.Printf("Error forwarding request to %s: %v", targetURL.String(), err)
 		http.Error(w, "Error forwarding request", http.StatusBadGateway)
 		return
 	}
@@ -153,31 +147,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Copy the response body
 	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, resp.Body)
-	if err != nil {
-		log.Printf("Error copying response body: %v", err)
-	}
-}
-
-func createHTTPClient() *http.Client {
-	// Use HTTP/1.1 to avoid double HTTP/2 wrapping
-	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		MaxIdleConns:    100,
-		IdleConnTimeout: 90 * time.Second,
-		// GCP-specific settings
-		DisableKeepAlives:   false,
-		MaxIdleConnsPerHost: 10,
-		ForceAttemptHTTP2:   false, // Explicitly disable HTTP/2 forcing
-	}
-
-	return &http.Client{
-		Timeout:   300 * time.Second, // Longer timeout for proving operations
-		Transport: transport,
-	}
+	io.Copy(w, resp.Body)
 }
 
 func modifyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
@@ -188,41 +158,5 @@ func modifyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
 		}
 	}
 
-	// Add attestation header
 	w.Header().Set("Attestation-Report", cachedAttestationB64)
-
-	// Add some debugging headers
-	w.Header().Set("X-Proxy-Version", "1.0")
-	w.Header().Set("X-Proxy-Protocol", resp.Proto)
-}
-
-// Helper function to get client IP
-func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header first
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return xff
-	}
-
-	// Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-
-	// Fall back to RemoteAddr
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-// Helper function to get scheme
-func getScheme(r *http.Request) string {
-	if r.TLS != nil {
-		return "https"
-	}
-	if scheme := r.Header.Get("X-Forwarded-Proto"); scheme != "" {
-		return scheme
-	}
-	return "http"
 }
