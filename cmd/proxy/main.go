@@ -46,16 +46,16 @@ func main() {
 
 	h2s := &http2.Server{
 		MaxConcurrentStreams: 100,
-		MaxReadFrameSize:     1048576, // 1MB
-		IdleTimeout:          60 * time.Second,
+		MaxReadFrameSize:     1048576,           // 1MB
+		IdleTimeout:          300 * time.Second, // Match client timeout
 	}
 
 	server := &http.Server{
 		Addr:         ProxyPort,
 		Handler:      h2c.NewHandler(mux, h2s),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  300 * time.Second, // Match proving timeout
+		WriteTimeout: 300 * time.Second,
+		IdleTimeout:  300 * time.Second,
 	}
 
 	log.Fatal(server.ListenAndServe())
@@ -168,6 +168,10 @@ func createHTTPClient() *http.Client {
 		}).DialContext,
 		MaxIdleConns:    100,
 		IdleConnTimeout: 90 * time.Second,
+		// GCP-specific settings
+		DisableKeepAlives:   false,
+		MaxIdleConnsPerHost: 10,
+		ForceAttemptHTTP2:   false, // Explicitly disable HTTP/2 forcing
 	}
 
 	return &http.Client{
