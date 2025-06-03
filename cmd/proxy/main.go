@@ -37,7 +37,7 @@ func main() {
 		log.Fatal("Invalid target server:", err)
 	}
 
-	// Create reverse proxy with defaults
+	// Create reverse proxy with better defaults
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	// Custom director to add attestation headers
@@ -46,6 +46,7 @@ func main() {
 		originalDirector(req)
 		refreshAttestationIfNeeded(req)
 
+		// Better proxy headers
 		req.Header.Set("X-Forwarded-Proto", getScheme(req))
 		req.Header.Set("X-Forwarded-Host", req.Host)
 		req.Header.Set("X-Real-IP", getClientIP(req))
@@ -64,12 +65,22 @@ func main() {
 		HostPolicy: autocert.HostWhitelist("miden.lunal.dev"),
 	}
 
+	// Add logging for certificate events
+	log.Println("Autocert manager configured for: miden.lunal.dev")
+
 	server := &http.Server{
 		Addr:    HTTPSPort,
 		Handler: proxy,
 		TLSConfig: &tls.Config{
 			GetCertificate: m.GetCertificate,
 			MinVersion:     tls.VersionTLS12,
+			NextProtos:     []string{"h2", "http/1.1"}, // Explicit HTTP/2 support for gRPC
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			},
 		},
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
