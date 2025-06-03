@@ -1,5 +1,5 @@
 # Makefile
-.PHONY: all clean ffi ffi-custom install
+.PHONY: all clean ffi ffi-custom install uninstall
 
 # Default target
 all: ffi
@@ -7,6 +7,14 @@ all: ffi
 # Directory configuration
 BUILD_DIR = build
 SRC_DIR = pkg/attestation
+
+# Installation configuration
+PREFIX ?= /usr/local
+LIBDIR = $(PREFIX)/lib
+INCLUDEDIR = $(PREFIX)/include
+
+# Detect OS for ldconfig
+UNAME_S := $(shell uname -s)
 
 # The output shared library
 LIB_NAME = libattestation.so
@@ -39,8 +47,23 @@ clean:
 	@echo "Cleaned build artifacts"
 
 # Install the library to system location (may require sudo)
+# Usage: make install [PREFIX=/custom/path]
 install: ffi
-	install -m 0644 $(LIB_PATH) /usr/local/lib/
-	install -m 0644 $(BUILD_DIR)/$(LIB_NAME:.so=.h) /usr/local/include/
+	mkdir -p $(LIBDIR)
+	mkdir -p $(INCLUDEDIR)
+	install -m 0644 $(LIB_PATH) $(LIBDIR)/
+	install -m 0644 $(BUILD_DIR)/$(LIB_NAME:.so=.h) $(INCLUDEDIR)/
+ifeq ($(UNAME_S),Linux)
 	ldconfig
-	@echo "Library installed to /usr/local/lib/ and /usr/local/include/"
+endif
+	@echo "Library installed to $(LIBDIR)/ and $(INCLUDEDIR)/"
+
+# Uninstall the library from system location (may require sudo)
+# Usage: make uninstall [PREFIX=/custom/path]
+uninstall:
+	rm -f $(LIBDIR)/$(LIB_NAME)
+	rm -f $(INCLUDEDIR)/$(LIB_NAME:.so=.h)
+ifeq ($(UNAME_S),Linux)
+	ldconfig
+endif
+	@echo "Library uninstalled from $(LIBDIR)/ and $(INCLUDEDIR)/"
