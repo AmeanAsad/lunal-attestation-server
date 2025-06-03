@@ -62,7 +62,7 @@ func main() {
 	m := &autocert.Manager{
 		Cache:      autocert.DirCache("certs"),
 		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist("miden.lunal.dev"),
+		HostPolicy: autocert.HostWhitelist("miden.lunal.dev", "35.239.17.184"),
 	}
 
 	// Add logging for certificate events
