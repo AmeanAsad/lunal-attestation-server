@@ -3,59 +3,111 @@ package main
 import (
 	"crypto/tls"
 	"encoding/base64"
-	"fmt"
-	"io"
 	"log"
-	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"time"
 
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
+	"golang.org/x/crypto/acme/autocert"
 
 	"lunal-tee-attestation/pkg/attestation" // Update this with your actual module path
 )
 
 const (
-	// Port for the proxy server
-	ProxyPort = ":9080"
-	// Target server URL (local server on same machine)
-	TargetServer = "http://127.0.0.1:8082"
-	// TPM device path
-	TPMDevicePath = "/dev/tpm0" // Adjust if your TPM device path is different
+	HTTPPort      = ":80"
+	HTTPSPort     = ":443"
+	TargetServer  = "http://127.0.0.1:8082"
+	TPMDevicePath = "/dev/tpm0"
 )
 
 var (
-	// Store the attestation data to avoid regenerating it for every request
 	cachedAttestation     []byte
 	cachedAttestationB64  string
 	lastAttestationTime   time.Time
-	attestationTTLMinutes = 60 // Refresh attestation every 5 minutes
+	attestationTTLMinutes = 60
 )
 
 func main() {
-	// Generate initial attestation on startup
 	generateAttestation()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", proxyHandler)
-
-	fmt.Printf("Proxy server starting on port %s with HTTP/2 support\n", ProxyPort)
-	fmt.Printf("Forwarding all requests to %s\n", TargetServer)
-
-	h2s := &http2.Server{}
-
-	server := &http.Server{
-		Addr:    ProxyPort,
-		Handler: h2c.NewHandler(mux, h2s),
+	// Parse target URL once
+	target, err := url.Parse(TargetServer)
+	if err != nil {
+		log.Fatal("Invalid target server:", err)
 	}
 
-	log.Fatal(server.ListenAndServe())
+	// Create reverse proxy with defaults
+	proxy := httputil.NewSingleHostReverseProxy(target)
+
+	// Custom director to add attestation headers
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		refreshAttestationIfNeeded(req)
+
+		req.Header.Set("X-Forwarded-Proto", getScheme(req))
+		req.Header.Set("X-Forwarded-Host", req.Host)
+		req.Header.Set("X-Real-IP", getClientIP(req))
+	}
+
+	// Add attestation to response
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Set("Attestation-Report", cachedAttestationB64)
+		return nil
+	}
+
+	// Auto HTTPS with Let's Encrypt
+	m := &autocert.Manager{
+		Cache:      autocert.DirCache("certs"),
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist("miden.lunal.dev"),
+	}
+
+	server := &http.Server{
+		Addr:    HTTPSPort,
+		Handler: proxy,
+		TLSConfig: &tls.Config{
+			GetCertificate: m.GetCertificate,
+			MinVersion:     tls.VersionTLS12,
+		},
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	// Redirect HTTP to HTTPS
+	go func() {
+		log.Println("Starting HTTP->HTTPS redirect on", HTTPPort)
+		log.Fatal(http.ListenAndServe(HTTPPort, m.HTTPHandler(nil)))
+	}()
+
+	log.Println("Starting HTTPS server on", HTTPSPort)
+	log.Println("Auto-certificates enabled for: miden.lunal.dev")
+	log.Fatal(server.ListenAndServeTLS("", ""))
+}
+
+func getScheme(req *http.Request) string {
+	if req.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func getClientIP(req *http.Request) string {
+	// Check X-Forwarded-For header first
+	if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
+		return xff
+	}
+	// Check X-Real-IP header
+	if xri := req.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	// Fall back to RemoteAddr
+	return req.RemoteAddr
 }
 
 func generateAttestation() {
-
 	// Create attestation with default options
 	opts := attestation.DefaultAttestOptions()
 	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
@@ -76,107 +128,9 @@ func generateAttestation() {
 }
 
 func refreshAttestationIfNeeded(r *http.Request) {
-	// Check if attestation is stale
-	// if time.Since(lastAttestationTime).Minutes() > float64(attestationTTLMinutes) {
-	log.Println("Refreshing attestation...")
-	fmt.Printf("[TASK] Processing request: %s %s\n", r.Method, r.URL.Path)
-	fmt.Printf("[TASK] User-Agent: %s\n", r.Header.Get("User-Agent"))
-	fmt.Printf("[TASK] Remote Address: %s\n", r.RemoteAddr)
-	fmt.Println("[TASK] Attestation is included in response header")
+	log.Printf("[TASK] Processing request: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+	log.Printf("[TASK] User-Agent: %s", r.Header.Get("User-Agent"))
+	log.Printf("[TASK] Remote Address: %s", r.RemoteAddr)
+	log.Println("[TASK] Attestation is included in response header")
 	generateAttestation()
-	// }
-}
-
-func proxyHandler(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	log.Printf("🚀 [%s] Request started: %s %s from %s", start.Format("15:04:05.000"), r.Method, r.URL.Path, r.RemoteAddr)
-
-	// Refresh attestation if needed
-	refreshAttestationIfNeeded(r)
-
-	// Create the target URL (keep the same path)
-	targetURL, err := url.Parse(TargetServer)
-	if err != nil {
-		log.Printf("❌ Invalid target server: %v", err)
-		http.Error(w, "Invalid target server", http.StatusInternalServerError)
-		return
-	}
-
-	targetURL.Path = r.URL.Path
-	targetURL.RawQuery = r.URL.RawQuery
-
-	log.Printf("🎯 Forwarding to: %s", targetURL.String())
-
-	// Create a new request to forward to the target server
-	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body)
-	if err != nil {
-		log.Printf("❌ Error creating proxy request: %v", err)
-		http.Error(w, "Error creating proxy request", http.StatusInternalServerError)
-		return
-	}
-
-	// Copy all headers from original request
-	for key, values := range r.Header {
-		for _, value := range values {
-			proxyReq.Header.Add(key, value)
-		}
-	}
-
-	// Set/override some headers
-	proxyReq.Header.Set("X-Forwarded-For", r.RemoteAddr)
-	proxyReq.Header.Set("X-Forwarded-Proto", "http")
-	if r.Header.Get("X-Real-IP") == "" {
-		proxyReq.Header.Set("X-Real-IP", r.RemoteAddr)
-	}
-
-	// Create HTTP client with HTTP/2 support and increased timeout
-	client := &http.Client{
-		Timeout: 300 * time.Second, // Increased from 30s to 5 minutes
-		Transport: &http2.Transport{
-			AllowHTTP: true,
-			// Dial function for HTTP/2 over TCP
-			DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-				return net.Dial(network, addr)
-			},
-		},
-	}
-
-	log.Printf("⏳ Sending request to target server...")
-
-	// Send the request to target server
-	resp, err := client.Do(proxyReq)
-	elapsed := time.Since(start)
-
-	if err != nil {
-		log.Printf("❌ Request failed after %v: %v", elapsed, err)
-		http.Error(w, "Error forwarding request", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	log.Printf("✅ Got response after %v: status %d", elapsed, resp.StatusCode)
-
-	// Modify response headers before sending back
-	modifyResponseHeaders(w, resp)
-
-	// Copy the response body
-	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, resp.Body)
-	if err != nil {
-		log.Printf("❌ Error copying response body: %v", err)
-	}
-
-	totalElapsed := time.Since(start)
-	log.Printf("🏁 [%s] Request completed in %v", time.Now().Format("15:04:05.000"), totalElapsed)
-}
-
-func modifyResponseHeaders(w http.ResponseWriter, resp *http.Response) {
-	// Copy original response headers
-	for key, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-
-	w.Header().Set("Attestation-Report", cachedAttestationB64)
 }
