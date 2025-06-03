@@ -53,9 +53,6 @@ install: ffi
 	mkdir -p $(INCLUDEDIR)
 	install -m 0644 $(LIB_PATH) $(LIBDIR)/
 	install -m 0644 $(BUILD_DIR)/$(LIB_NAME:.so=.h) $(INCLUDEDIR)/
-ifeq ($(UNAME_S),Linux)
-	ldconfig
-endif
 	@echo "Library installed to $(LIBDIR)/ and $(INCLUDEDIR)/"
 
 # Uninstall the library from system location (may require sudo)
@@ -63,7 +60,4 @@ endif
 uninstall:
 	rm -f $(LIBDIR)/$(LIB_NAME)
 	rm -f $(INCLUDEDIR)/$(LIB_NAME:.so=.h)
-ifeq ($(UNAME_S),Linux)
-	ldconfig
-endif
 	@echo "Library uninstalled from $(LIBDIR)/ and $(INCLUDEDIR)/"
