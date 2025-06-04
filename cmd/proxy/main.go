@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/base64"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -79,6 +81,21 @@ func main() {
 	// Add attestation to response
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Set("Attestation-Report", cachedAttestationB64)
+
+		// Read and log the response body for debugging
+		if resp.Body != nil {
+			bodyBytes, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Printf("Error reading response body: %v", err)
+			} else {
+				// Print the response body content
+				log.Printf("Response body: %s", string(bodyBytes))
+
+				// Create a new reader with the same content for the downstream response
+				resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			}
+		}
+
 		log.Printf("Response from backend: %d %s for %s %s",
 			resp.StatusCode, resp.Status, resp.Request.Method, resp.Request.URL.Path)
 		return nil
