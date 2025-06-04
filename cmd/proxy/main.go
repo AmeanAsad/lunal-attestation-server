@@ -31,19 +31,20 @@ func generateAttestation() {
 	opts := attestation.DefaultAttestOptions()
 	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
 
-	data, err := attestation.Attest(opts)
-	if err != nil {
-		log.Fatalf("Failed to generate attestation: %v", err)
-	}
+	// data, err := attestation.Attest(opts)
+	// if err != nil {
+	// 	log.Fatalf("Failed to generate attestation: %v", err)
+	// }
 
 	// Cache the base64 encoded version
-	cachedAttestationB64 = base64.StdEncoding.EncodeToString(data)
 
 	// Get and cache the gzipped JSON version as raw bytes
-	cachedAttestationGzip, err = attestation.GetAttestationGzipJSON(opts)
-	if err != nil {
-		log.Fatalf("Failed to generate JSON gzip attestation: %v", err)
-	}
+	// cachedAttestationGzip, err = attestation.GetAttestationGzipJSON(opts)
+	cachedAttestationB64 = base64.StdEncoding.EncodeToString(cachedAttestationGzip)
+
+	// if err != nil {
+	// 	log.Fatalf("Failed to generate JSON gzip attestation: %v", err)
+	// }
 
 	lastAttestationTime = time.Now()
 }
@@ -74,7 +75,7 @@ func main() {
 	// Add attestation to response
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		// resp.Header.Set("Attestation-Report", cachedAttestationB64)
-		resp.Header.Set("Attestation-Report", string(cachedAttestationGzip))
+		resp.Header.Set("Attestation-Report", cachedAttestationB64)
 		return nil
 	}
 
