@@ -29,8 +29,8 @@ var (
 
 func generateAttestation() {
 	opts := attestation.DefaultAttestOptions()
+	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
 
-	// Get the binary attestation report
 	data, err := attestation.Attest(opts)
 	if err != nil {
 		log.Fatalf("Failed to generate attestation: %v", err)
