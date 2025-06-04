@@ -39,12 +39,12 @@ func generateAttestation() {
 	// Cache the base64 encoded version
 
 	// Get and cache the gzipped JSON version as raw bytes
-	// cachedAttestationGzip, err = attestation.GetAttestationGzipJSON(opts)
+	cachedAttestationGzip, err := attestation.GetAttestationGzipJSON(opts)
 	cachedAttestationB64 = base64.StdEncoding.EncodeToString(cachedAttestationGzip)
 
-	// if err != nil {
-	// 	log.Fatalf("Failed to generate JSON gzip attestation: %v", err)
-	// }
+	if err != nil {
+		log.Fatalf("Failed to generate JSON gzip attestation: %v", err)
+	}
 
 	lastAttestationTime = time.Now()
 }
