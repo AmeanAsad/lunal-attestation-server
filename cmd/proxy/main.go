@@ -51,12 +51,14 @@ func generateAttestation() {
 
 func main() {
 	generateAttestation()
+	log.Println("Attestation generated successfully")
 
 	// Parse target URL once
 	target, err := url.Parse(TargetServer)
 	if err != nil {
 		log.Fatal("Invalid target server:", err)
 	}
+	log.Printf("Configured proxy to target: %s", TargetServer)
 
 	// Create reverse proxy with better defaults
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -64,19 +66,30 @@ func main() {
 	// Custom director to add attestation headers
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
+		log.Printf("Incoming request: %s %s from %s", req.Method, req.URL.Path, getClientIP(req))
 		originalDirector(req)
 
 		// Better proxy headers
 		req.Header.Set("X-Forwarded-Proto", getScheme(req))
 		req.Header.Set("X-Forwarded-Host", req.Host)
 		req.Header.Set("X-Real-IP", getClientIP(req))
+		log.Printf("Forwarding request to backend: %s %s", req.Method, req.URL.String())
 	}
 
 	// Add attestation to response
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		// resp.Header.Set("Attestation-Report", cachedAttestationB64)
 		resp.Header.Set("Attestation-Report", cachedAttestationB64)
+		log.Printf("Response from backend: %d %s for %s %s",
+			resp.StatusCode, resp.Status, resp.Request.Method, resp.Request.URL.Path)
 		return nil
+	}
+
+	// Add error handler
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("Proxy error: %v for %s %s from %s",
+			err, r.Method, r.URL.Path, getClientIP(r))
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte("Proxy Error: " + err.Error()))
 	}
 
 	// Auto HTTPS with Let's Encrypt
