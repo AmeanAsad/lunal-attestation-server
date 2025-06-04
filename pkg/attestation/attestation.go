@@ -1,7 +1,10 @@
 package attestation
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -53,6 +56,40 @@ type AttestOptions struct {
 	TeeNonce []byte
 	// Format specifies the output format (binarypb or textproto)
 	Format string
+}
+
+// GetAttestationJSON creates an attestation report and returns it as JSON
+func GetAttestationJSON(opts AttestOptions) ([]byte, error) {
+	attestation, err := GetAttestation(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert proto to JSON
+	return json.Marshal(attestation)
+}
+
+// GetAttestationGzipJSON creates an attestation report in JSON format and compresses it with gzip
+func GetAttestationGzipJSON(opts AttestOptions) ([]byte, error) {
+	jsonData, err := GetAttestationJSON(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Compress with gzip
+	var buf bytes.Buffer
+	gzipWriter := gzip.NewWriter(&buf)
+
+	_, err = gzipWriter.Write(jsonData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write gzip data: %v", err)
+	}
+
+	if err = gzipWriter.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %v", err)
+	}
+
+	return buf.Bytes(), nil
 }
 
 // DefaultAttestOptions returns the default options for attestation

@@ -9,24 +9,44 @@ import (
 	"net/url"
 	"time"
 
-	"golang.org/x/crypto/acme/autocert"
+	"lunal-tee-attestation/pkg/attestation" // Replace with your actual module path
 
-	"lunal-tee-attestation/pkg/attestation" // Update this with your actual module path
+	"golang.org/x/crypto/acme/autocert"
 )
 
+// Configuration constants
 const (
-	HTTPPort      = ":80"
-	HTTPSPort     = ":443"
-	TargetServer  = "http://127.0.0.1:8082"
-	TPMDevicePath = "/dev/tpm0"
+	TargetServer = "http://localhost:3000" // Your backend server
+	HTTPPort     = ":80"
+	HTTPSPort    = ":443"
 )
 
 var (
-	cachedAttestation     []byte
 	cachedAttestationB64  string
+	cachedAttestationGzip []byte
 	lastAttestationTime   time.Time
-	attestationTTLMinutes = 60
 )
+
+func generateAttestation() {
+	opts := attestation.DefaultAttestOptions()
+
+	// Get the binary attestation report
+	data, err := attestation.Attest(opts)
+	if err != nil {
+		log.Fatalf("Failed to generate attestation: %v", err)
+	}
+
+	// Cache the base64 encoded version
+	cachedAttestationB64 = base64.StdEncoding.EncodeToString(data)
+
+	// Get and cache the gzipped JSON version as raw bytes
+	cachedAttestationGzip, err = attestation.GetAttestationGzipJSON(opts)
+	if err != nil {
+		log.Fatalf("Failed to generate JSON gzip attestation: %v", err)
+	}
+
+	lastAttestationTime = time.Now()
+}
 
 func main() {
 	generateAttestation()
@@ -44,7 +64,6 @@ func main() {
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
-		refreshAttestationIfNeeded(req)
 
 		// Better proxy headers
 		req.Header.Set("X-Forwarded-Proto", getScheme(req))
@@ -54,7 +73,8 @@ func main() {
 
 	// Add attestation to response
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		resp.Header.Set("Attestation-Report", cachedAttestationB64)
+		// resp.Header.Set("Attestation-Report", cachedAttestationB64)
+		resp.Header.Set("Attestation-Report", string(cachedAttestationGzip))
 		return nil
 	}
 
@@ -62,11 +82,11 @@ func main() {
 	m := &autocert.Manager{
 		Cache:      autocert.DirCache("certs"),
 		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist("miden.lunal.dev", "35.239.17.184"),
+		HostPolicy: autocert.HostWhitelist("nexus-mcp.lunal.dev"),
 	}
 
 	// Add logging for certificate events
-	log.Println("Autocert manager configured for: miden.lunal.dev")
+	log.Println("Autocert manager configured for: nexus-mcp.lunal.dev")
 
 	server := &http.Server{
 		Addr:    HTTPSPort,
@@ -94,10 +114,11 @@ func main() {
 	}()
 
 	log.Println("Starting HTTPS server on", HTTPSPort)
-	log.Println("Auto-certificates enabled for: miden.lunal.dev")
+	log.Println("Auto-certificates enabled for: nexus-mcp.lunal.dev")
 	log.Fatal(server.ListenAndServeTLS("", ""))
 }
 
+// getScheme returns the scheme (http or https) of the request
 func getScheme(req *http.Request) string {
 	if req.TLS != nil {
 		return "https"
@@ -105,43 +126,14 @@ func getScheme(req *http.Request) string {
 	return "http"
 }
 
+// getClientIP extracts the client's real IP address
 func getClientIP(req *http.Request) string {
-	// Check X-Forwarded-For header first
-	if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
-		return xff
-	}
-	// Check X-Real-IP header
-	if xri := req.Header.Get("X-Real-IP"); xri != "" {
-		return xri
+	// Try standard headers first
+	for _, header := range []string{"X-Real-IP", "X-Forwarded-For"} {
+		if ip := req.Header.Get(header); ip != "" {
+			return ip
+		}
 	}
 	// Fall back to RemoteAddr
 	return req.RemoteAddr
-}
-
-func generateAttestation() {
-	// Create attestation with default options
-	opts := attestation.DefaultAttestOptions()
-	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
-
-	attestBytes, err := attestation.Attest(opts)
-	if err != nil {
-		log.Printf("WARNING: Failed to generate attestation: %v", err)
-		cachedAttestationB64 = base64.StdEncoding.EncodeToString([]byte("attestation-generation-failed"))
-		return
-	}
-
-	// Cache the attestation and its base64 representation
-	cachedAttestation = attestBytes
-	cachedAttestationB64 = base64.StdEncoding.EncodeToString(attestBytes)
-	lastAttestationTime = time.Now()
-
-	log.Printf("Successfully generated attestation (%d bytes)", len(attestBytes))
-}
-
-func refreshAttestationIfNeeded(r *http.Request) {
-	log.Printf("[TASK] Processing request: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
-	log.Printf("[TASK] User-Agent: %s", r.Header.Get("User-Agent"))
-	log.Printf("[TASK] Remote Address: %s", r.RemoteAddr)
-	log.Println("[TASK] Attestation is included in response header")
-	generateAttestation()
 }
