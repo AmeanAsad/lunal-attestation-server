@@ -71,9 +71,6 @@ func DefaultAttestOptions() AttestOptions {
 
 func GetRawTdxQuoteBytes(opts AttestOptions) ([]byte, error) {
 	// Validate that we're asking for TDX
-	if opts.TeeTechnology != Tdx {
-		return nil, fmt.Errorf("TeeTechnology must be %s, got %s", Tdx, opts.TeeTechnology)
-	}
 
 	// Create the TDX quote provider
 	qp, err := tg.GetQuoteProvider()
