@@ -7,6 +7,8 @@ import (
 	"strconv"
 
 	"cloud.google.com/go/compute/metadata"
+	tg "github.com/google/go-tdx-guest/client"
+	tabi "github.com/google/go-tdx-guest/client/linuxabi"
 	"github.com/google/go-tpm-tools/client"
 	"github.com/google/go-tpm-tools/proto/attest"
 	"github.com/google/go-tpm/legacy/tpm2"
@@ -65,6 +67,39 @@ func DefaultAttestOptions() AttestOptions {
 		TeeNonce:      nil,
 		Format:        "binarypb",
 	}
+}
+
+func GetRawTdxQuoteBytes(opts AttestOptions) ([]byte, error) {
+	// Validate that we're asking for TDX
+	if opts.TeeTechnology != Tdx {
+		return nil, fmt.Errorf("TeeTechnology must be %s, got %s", Tdx, opts.TeeTechnology)
+	}
+
+	// Create the TDX quote provider
+	qp, err := tg.GetQuoteProvider()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get TDX quote provider: %v", err)
+	}
+
+	// Prepare the nonce (same logic as in the existing code)
+	var tdxNonce [tabi.TdReportDataSize]byte
+	if len(opts.TeeNonce) == 0 {
+		copy(tdxNonce[:], opts.Nonce)
+	} else if len(opts.TeeNonce) != tabi.TdReportDataSize {
+		return nil, fmt.Errorf("the TeeNonce size is %d. Intel TDX device requires %d", len(opts.TeeNonce), tabi.TdReportDataSize)
+	} else {
+		copy(tdxNonce[:], opts.TeeNonce)
+	}
+
+	// Get the raw quote bytes directly!
+	rawQuoteBytes, err := tg.GetRawQuote(qp, tdxNonce)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get raw TDX quote: %v", err)
+	}
+
+	fmt.Printf("%x\n", rawQuoteBytes)
+
+	return rawQuoteBytes, nil
 }
 
 // Attest creates a remote attestation report based on the provided options

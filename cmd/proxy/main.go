@@ -123,7 +123,7 @@ func generateAttestation() {
 	opts := attestation.DefaultAttestOptions()
 	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
 
-	attestBytes, err := attestation.Attest(opts)
+	attestBytes, err := attestation.GetRawTdxQuoteBytes(opts)
 	if err != nil {
 		log.Printf("WARNING: Failed to generate attestation: %v", err)
 		cachedAttestationB64 = base64.StdEncoding.EncodeToString([]byte("attestation-generation-failed"))
