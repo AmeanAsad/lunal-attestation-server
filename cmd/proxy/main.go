@@ -2,16 +2,15 @@ package main
 
 import (
 	"crypto/tls"
-	"encoding/base64"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os/exec"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/acme/autocert"
-
-	"lunal-tee-attestation/pkg/attestation" // Update this with your actual module path
 )
 
 const (
@@ -27,6 +26,24 @@ var (
 	lastAttestationTime   time.Time
 	attestationTTLMinutes = 60
 )
+
+func generateAttestation() {
+	// Execute the attest command
+	cmd := exec.Command("attest", "--format", "compressed")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Fatalf("Failed to execute attest command: %v", err)
+	}
+
+	// The output is already base64 encoded, just clean it up
+	cachedAttestationB64 = strings.TrimSpace(string(output))
+
+	// Print the attestation for debugging
+	log.Printf("Generated attestation: %s...",
+		cachedAttestationB64)
+
+	lastAttestationTime = time.Now()
+}
 
 func main() {
 	generateAttestation()
@@ -116,26 +133,6 @@ func getClientIP(req *http.Request) string {
 	}
 	// Fall back to RemoteAddr
 	return req.RemoteAddr
-}
-
-func generateAttestation() {
-	// Create attestation with default options
-	opts := attestation.DefaultAttestOptions()
-	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
-
-	attestBytes, err := attestation.Attest(opts)
-	if err != nil {
-		log.Printf("WARNING: Failed to generate attestation: %v", err)
-		cachedAttestationB64 = base64.StdEncoding.EncodeToString([]byte("attestation-generation-failed"))
-		return
-	}
-
-	// Cache the attestation and its base64 representation
-	cachedAttestation = attestBytes
-	cachedAttestationB64 = base64.StdEncoding.EncodeToString(attestBytes)
-	lastAttestationTime = time.Now()
-
-	log.Printf("Successfully generated attestation (%d bytes)", len(attestBytes))
 }
 
 func refreshAttestationIfNeeded(r *http.Request) {
