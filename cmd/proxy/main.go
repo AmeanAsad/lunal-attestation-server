@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"flag"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -25,6 +26,8 @@ var (
 	cachedAttestationB64  string
 	lastAttestationTime   time.Time
 	attestationTTLMinutes = 60
+	hostParam             = flag.String("host", "", "Host domain for TLS certificate (required)")
+	upstreamParam         = flag.String("upstream", "", "Upstream server URL (required)")
 )
 
 func generateAttestation() {
@@ -46,15 +49,27 @@ func generateAttestation() {
 }
 
 func main() {
+
+	flag.Parse()
+
+	// Validate required parameters
+	if *hostParam == "" {
+		log.Fatal("--host parameter is required")
+	}
+	if *upstreamParam == "" {
+		log.Fatal("--upstream parameter is required")
+	}
+
+	log.Printf("Starting proxy with host: %s, upstream: %s", *hostParam, *upstreamParam)
+
 	generateAttestation()
 
-	// Parse target URL once
 	target, err := url.Parse(TargetServer)
 	if err != nil {
 		log.Fatal("Invalid target server:", err)
 	}
 
-	// Create reverse proxy with better defaults
+	// Create reverse proxy with defaults
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	// Custom director to add attestation headers
@@ -63,7 +78,6 @@ func main() {
 		originalDirector(req)
 		refreshAttestationIfNeeded(req)
 
-		// Better proxy headers
 		req.Header.Set("X-Forwarded-Proto", getScheme(req))
 		req.Header.Set("X-Forwarded-Host", req.Host)
 		req.Header.Set("X-Real-IP", getClientIP(req))
@@ -79,11 +93,11 @@ func main() {
 	m := &autocert.Manager{
 		Cache:      autocert.DirCache("certs"),
 		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist("miden.lunal.dev", "35.239.17.184"),
+		HostPolicy: autocert.HostWhitelist(*hostParam),
 	}
 
 	// Add logging for certificate events
-	log.Println("Autocert manager configured for: miden.lunal.dev")
+	log.Printf("Autocert manager configured for: %s", *hostParam)
 
 	server := &http.Server{
 		Addr:    HTTPSPort,
@@ -111,7 +125,7 @@ func main() {
 	}()
 
 	log.Println("Starting HTTPS server on", HTTPSPort)
-	log.Println("Auto-certificates enabled for: miden.lunal.dev")
+	log.Printf("Auto-certificates enabled for: %s", *hostParam)
 	log.Fatal(server.ListenAndServeTLS("", ""))
 }
 
