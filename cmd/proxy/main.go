@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,28 +30,24 @@ var (
 	attestationTTLMinutes = 60
 	hostParam             = flag.String("host", "", "Host domain for TLS certificate (required)")
 	upstreamParam         = flag.String("upstream", "", "Upstream server URL (required)")
+	attestBinaryPath      string
 )
 
-func generateAttestation() {
-	// Execute the attest command
-	cmd := exec.Command("attest", "--format", "compressed")
-	output, err := cmd.Output()
+func init() {
+	// Get the directory where the current executable is located
+	execPath, err := os.Executable()
 	if err != nil {
-		log.Fatalf("Failed to execute attest command: %v", err)
+		log.Fatalf("Failed to get executable path: %v", err)
 	}
+	execDir := filepath.Dir(execPath)
 
-	// The output is already base64 encoded, just clean it up
-	cachedAttestationB64 = strings.TrimSpace(string(output))
+	// Set the path to the attest binary in the same directory
+	attestBinaryPath = filepath.Join(execDir, "attest")
 
-	// Print the attestation for debugging
-	log.Printf("Generated attestation: %s...",
-		cachedAttestationB64)
-
-	lastAttestationTime = time.Now()
+	log.Printf("Will use attest binary at: %s", attestBinaryPath)
 }
 
 func main() {
-
 	flag.Parse()
 
 	// Validate required parameters
@@ -147,6 +145,24 @@ func getClientIP(req *http.Request) string {
 	}
 	// Fall back to RemoteAddr
 	return req.RemoteAddr
+}
+
+func generateAttestation() {
+	// Execute the attest command from the same directory as this executable
+	cmd := exec.Command(attestBinaryPath, "--format", "compressed")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Fatalf("Failed to execute attest command at %s: %v", attestBinaryPath, err)
+	}
+
+	// The output is already base64 encoded, just clean it up
+	cachedAttestationB64 = strings.TrimSpace(string(output))
+
+	// Print the attestation for debugging
+	log.Printf("Generated attestation: %s...",
+		cachedAttestationB64)
+
+	lastAttestationTime = time.Now()
 }
 
 func refreshAttestationIfNeeded(r *http.Request) {
