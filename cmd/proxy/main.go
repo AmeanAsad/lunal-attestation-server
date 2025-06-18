@@ -19,7 +19,6 @@ import (
 const (
 	HTTPPort      = ":80"
 	HTTPSPort     = ":443"
-	TargetServer  = "http://127.0.0.1:8082"
 	TPMDevicePath = "/dev/tpm0"
 )
 
@@ -62,9 +61,9 @@ func main() {
 
 	generateAttestation()
 
-	target, err := url.Parse(TargetServer)
+	target, err := url.Parse(*upstreamParam)
 	if err != nil {
-		log.Fatal("Invalid target server:", err)
+		log.Fatal("Invalid upstream server:", err)
 	}
 
 	// Create reverse proxy with defaults
