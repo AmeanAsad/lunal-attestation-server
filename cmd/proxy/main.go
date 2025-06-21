@@ -29,6 +29,7 @@ var (
 	attestationTTLMinutes = 60
 	hostParam             = flag.String("host", "", "Host domain for TLS certificate (required)")
 	upstreamParam         = flag.String("upstream", "", "Upstream server URL (required)")
+	platformParam         = flag.String("platform", "", "Attestation platform: sev-snp or tdx (required)")
 	attestBinaryPath      string
 )
 
@@ -40,10 +41,8 @@ func init() {
 	}
 	execDir := filepath.Dir(execPath)
 
-	// Set the path to the attest binary in the same directory
-	attestBinaryPath = filepath.Join(execDir, "attest")
-
-	log.Printf("Will use attest binary at: %s", attestBinaryPath)
+	// attestBinaryPath will be set based on platform parameter
+	log.Printf("Executable directory: %s", execDir)
 }
 
 func main() {
@@ -55,6 +54,22 @@ func main() {
 	}
 	if *upstreamParam == "" {
 		log.Fatal("--upstream parameter is required")
+	}
+	if *platformParam == "" {
+		log.Fatal("--platform parameter is required (sev-snp or tdx)")
+	}
+
+	// Set attestBinaryPath based on platform
+	execPath, _ := os.Executable()
+	execDir := filepath.Dir(execPath)
+
+	switch *platformParam {
+	case "sev-snp":
+		attestBinaryPath = filepath.Join(execDir, "attest-sev-snp")
+	case "tdx":
+		attestBinaryPath = filepath.Join(execDir, "attest-tdx")
+	default:
+		log.Fatalf("Invalid platform: %s. Must be 'sev-snp' or 'tdx'", *platformParam)
 	}
 
 	log.Printf("Starting proxy with host: %s, upstream: %s", *hostParam, *upstreamParam)
