@@ -67,7 +67,7 @@ func main() {
 	case "sev-snp":
 		attestBinaryPath = filepath.Join(execDir, "attest-sev-snp")
 	case "tdx":
-		attestBinaryPath = filepath.Join(execDir, "attest-tdx")
+		attestBinaryPath = filepath.Join(execDir, "attest")
 	default:
 		log.Fatalf("Invalid platform: %s. Must be 'sev-snp' or 'tdx'", *platformParam)
 	}
@@ -98,6 +98,11 @@ func main() {
 	// Add attestation to response
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Set("Attestation-Report", cachedAttestationB64)
+
+		// Add CORS headers to expose the custom header
+		resp.Header.Set("Access-Control-Allow-Origin", "*")
+		resp.Header.Set("Access-Control-Expose-Headers", "Attestation-Report")
+
 		return nil
 	}
 
