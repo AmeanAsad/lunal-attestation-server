@@ -198,12 +198,7 @@ func generateAttestation() {
 	// The output is already base64 encoded, just clean it up
 	cachedAttestationB64 = strings.TrimSpace(string(output))
 
-	// Print the attestation for debugging (truncated for security)
-	if len(cachedAttestationB64) > 50 {
-		log.Printf("Generated attestation (%s): %s...", *platformParam, cachedAttestationB64[:50])
-	} else {
-		log.Printf("Generated attestation (%s): %s", *platformParam, cachedAttestationB64)
-	}
+	log.Printf("Generated attestation (%s): %s", *platformParam, cachedAttestationB64)
 
 	lastAttestationTime = time.Now()
 }
