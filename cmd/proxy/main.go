@@ -2,22 +2,23 @@ package main
 
 import (
 	"crypto/tls"
-	"encoding/base64"
+	"flag"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/acme/autocert"
-
-	"lunal-tee-attestation/pkg/attestation" // Update this with your actual module path
 )
 
 const (
 	HTTPPort      = ":80"
 	HTTPSPort     = ":443"
-	TargetServer  = "http://127.0.0.1:8082"
 	TPMDevicePath = "/dev/tpm0"
 )
 
@@ -26,18 +27,67 @@ var (
 	cachedAttestationB64  string
 	lastAttestationTime   time.Time
 	attestationTTLMinutes = 60
+	hostParam             = flag.String("host", "", "Host domain for TLS certificate (required)")
+	upstreamParam         = flag.String("upstream", "", "Upstream server URL (required)")
+	platformParam         = flag.String("platform", "", "Attestation platform: sev-snp or tdx (required)")
+	customDataParam       = flag.String("custom-data", "", "Custom data to include in attestation (optional)")
+	attestBinaryPath      string
 )
 
-func main() {
-	generateAttestation()
-
-	// Parse target URL once
-	target, err := url.Parse(TargetServer)
+func init() {
+	// Get the directory where the current executable is located
+	execPath, err := os.Executable()
 	if err != nil {
-		log.Fatal("Invalid target server:", err)
+		log.Fatalf("Failed to get executable path: %v", err)
+	}
+	execDir := filepath.Dir(execPath)
+
+	// attestBinaryPath will be set based on platform parameter
+	log.Printf("Executable directory: %s", execDir)
+}
+
+func main() {
+	flag.Parse()
+
+	// Validate required parameters
+	if *hostParam == "" {
+		log.Fatal("--host parameter is required")
+	}
+	if *upstreamParam == "" {
+		log.Fatal("--upstream parameter is required")
+	}
+	if *platformParam == "" {
+		log.Fatal("--platform parameter is required (sev-snp or tdx)")
 	}
 
-	// Create reverse proxy with better defaults
+	// Set attestBinaryPath based on platform
+	execPath, _ := os.Executable()
+	execDir := filepath.Dir(execPath)
+
+	switch *platformParam {
+	case "sev-snp":
+		// For SEV-SNP, use your Rust binary
+		attestBinaryPath = filepath.Join(execDir, "attest_amd")
+	case "tdx":
+		// Keep existing TDX binary
+		attestBinaryPath = filepath.Join(execDir, "attest_tdx")
+	default:
+		log.Fatalf("Invalid platform: %s. Must be 'sev-snp' or 'tdx'", *platformParam)
+	}
+
+	log.Printf("Starting proxy with host: %s, upstream: %s, platform: %s", *hostParam, *upstreamParam, *platformParam)
+	if *customDataParam != "" {
+		log.Printf("Using custom data: %s", *customDataParam)
+	}
+
+	generateAttestation()
+
+	target, err := url.Parse(*upstreamParam)
+	if err != nil {
+		log.Fatal("Invalid upstream server:", err)
+	}
+
+	// Create reverse proxy with defaults
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
 	// Custom director to add attestation headers
@@ -46,7 +96,6 @@ func main() {
 		originalDirector(req)
 		refreshAttestationIfNeeded(req)
 
-		// Better proxy headers
 		req.Header.Set("X-Forwarded-Proto", getScheme(req))
 		req.Header.Set("X-Forwarded-Host", req.Host)
 		req.Header.Set("X-Real-IP", getClientIP(req))
@@ -55,6 +104,11 @@ func main() {
 	// Add attestation to response
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Set("Attestation-Report", cachedAttestationB64)
+
+		// Add CORS headers to expose the custom header
+		resp.Header.Set("Access-Control-Allow-Origin", "*")
+		resp.Header.Set("Access-Control-Expose-Headers", "Attestation-Report")
+
 		return nil
 	}
 
@@ -62,11 +116,11 @@ func main() {
 	m := &autocert.Manager{
 		Cache:      autocert.DirCache("certs"),
 		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist("miden.lunal.dev", "35.239.17.184"),
+		HostPolicy: autocert.HostWhitelist(*hostParam),
 	}
 
 	// Add logging for certificate events
-	log.Println("Autocert manager configured for: miden.lunal.dev")
+	log.Printf("Autocert manager configured for: %s", *hostParam)
 
 	server := &http.Server{
 		Addr:    HTTPSPort,
@@ -94,7 +148,7 @@ func main() {
 	}()
 
 	log.Println("Starting HTTPS server on", HTTPSPort)
-	log.Println("Auto-certificates enabled for: miden.lunal.dev")
+	log.Printf("Auto-certificates enabled for: %s", *hostParam)
 	log.Fatal(server.ListenAndServeTLS("", ""))
 }
 
@@ -119,23 +173,34 @@ func getClientIP(req *http.Request) string {
 }
 
 func generateAttestation() {
-	// Create attestation with default options
-	opts := attestation.DefaultAttestOptions()
-	opts.Nonce = []byte("fixed-deterministic-nonce-for-server")
+	var cmd *exec.Cmd
 
-	attestBytes, err := attestation.Attest(opts)
-	if err != nil {
-		log.Printf("WARNING: Failed to generate attestation: %v", err)
-		cachedAttestationB64 = base64.StdEncoding.EncodeToString([]byte("attestation-generation-failed"))
-		return
+	switch *platformParam {
+	case "sev-snp":
+		if *customDataParam != "" {
+			cmd = exec.Command(attestBinaryPath, "attest", *customDataParam)
+		} else {
+			cmd = exec.Command(attestBinaryPath, "attest")
+		}
+	case "tdx":
+		cmd = exec.Command(attestBinaryPath, "--format", "compressed")
+	default:
+		log.Fatalf("Invalid platform: %s", *platformParam)
 	}
 
-	// Cache the attestation and its base64 representation
-	cachedAttestation = attestBytes
-	cachedAttestationB64 = base64.StdEncoding.EncodeToString(attestBytes)
-	lastAttestationTime = time.Now()
+	log.Printf("Executing attestation command: %s with args: %v", attestBinaryPath, cmd.Args[1:])
 
-	log.Printf("Successfully generated attestation (%d bytes)", len(attestBytes))
+	output, err := cmd.Output()
+	if err != nil {
+		log.Fatalf("Failed to execute attest command at %s: %v", attestBinaryPath, err)
+	}
+
+	// The output is already base64 encoded, just clean it up
+	cachedAttestationB64 = strings.TrimSpace(string(output))
+
+	log.Printf("Generated attestation (%s): %s", *platformParam, cachedAttestationB64)
+
+	lastAttestationTime = time.Now()
 }
 
 func refreshAttestationIfNeeded(r *http.Request) {
