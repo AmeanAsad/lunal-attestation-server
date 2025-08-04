@@ -30,6 +30,7 @@ var (
 	hostParam             = flag.String("host", "", "Host domain for TLS certificate (required)")
 	upstreamParam         = flag.String("upstream", "", "Upstream server URL (required)")
 	platformParam         = flag.String("platform", "", "Attestation platform: sev-snp or tdx (required)")
+	customDataParam       = flag.String("custom-data", "", "Custom data to include in attestation (optional)")
 	attestBinaryPath      string
 )
 
@@ -65,14 +66,19 @@ func main() {
 
 	switch *platformParam {
 	case "sev-snp":
-		attestBinaryPath = filepath.Join(execDir, "attest-sev-snp")
+		// For SEV-SNP, use your Rust binary
+		attestBinaryPath = filepath.Join(execDir, "attest_amd")
 	case "tdx":
-		attestBinaryPath = filepath.Join(execDir, "attest")
+		// Keep existing TDX binary
+		attestBinaryPath = filepath.Join(execDir, "attest_tdx")
 	default:
 		log.Fatalf("Invalid platform: %s. Must be 'sev-snp' or 'tdx'", *platformParam)
 	}
 
-	log.Printf("Starting proxy with host: %s, upstream: %s", *hostParam, *upstreamParam)
+	log.Printf("Starting proxy with host: %s, upstream: %s, platform: %s", *hostParam, *upstreamParam, *platformParam)
+	if *customDataParam != "" {
+		log.Printf("Using custom data: %s", *customDataParam)
+	}
 
 	generateAttestation()
 
@@ -167,8 +173,23 @@ func getClientIP(req *http.Request) string {
 }
 
 func generateAttestation() {
-	// Execute the attest command from the same directory as this executable
-	cmd := exec.Command(attestBinaryPath, "--format", "compressed")
+	var cmd *exec.Cmd
+
+	switch *platformParam {
+	case "sev-snp":
+		if *customDataParam != "" {
+			cmd = exec.Command(attestBinaryPath, "attest", *customDataParam)
+		} else {
+			cmd = exec.Command(attestBinaryPath, "attest")
+		}
+	case "tdx":
+		cmd = exec.Command(attestBinaryPath, "--format", "compressed")
+	default:
+		log.Fatalf("Invalid platform: %s", *platformParam)
+	}
+
+	log.Printf("Executing attestation command: %s with args: %v", attestBinaryPath, cmd.Args[1:])
+
 	output, err := cmd.Output()
 	if err != nil {
 		log.Fatalf("Failed to execute attest command at %s: %v", attestBinaryPath, err)
@@ -177,9 +198,12 @@ func generateAttestation() {
 	// The output is already base64 encoded, just clean it up
 	cachedAttestationB64 = strings.TrimSpace(string(output))
 
-	// Print the attestation for debugging
-	log.Printf("Generated attestation: %s...",
-		cachedAttestationB64)
+	// Print the attestation for debugging (truncated for security)
+	if len(cachedAttestationB64) > 50 {
+		log.Printf("Generated attestation (%s): %s...", *platformParam, cachedAttestationB64[:50])
+	} else {
+		log.Printf("Generated attestation (%s): %s", *platformParam, cachedAttestationB64)
+	}
 
 	lastAttestationTime = time.Now()
 }
